@@ -207,7 +207,7 @@ def decimate_and_refine_mesh(verts, faces, mask, decimate_ratio=0.1, refine_size
 
     if refine_remesh_size > 0:
         ms.meshing_isotropic_explicit_remeshing(iterations=3, targetlen=pml.AbsoluteValue(refine_remesh_size), selectedonly=True)
-    
+
     # repair
     ms.set_selection_none(allfaces=True)
     ms.meshing_repair_non_manifold_edges(method=0)
