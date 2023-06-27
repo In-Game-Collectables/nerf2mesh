@@ -1,4 +1,4 @@
 pip install ./raymarching
-pip install ./gridencoder
+TORCH_CUDA_ARCH_LIST=8.6 pip install ./gridencoder
 pip install ./freqencoder
 pip install ./shencoder
