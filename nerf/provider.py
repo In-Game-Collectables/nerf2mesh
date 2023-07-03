@@ -199,7 +199,7 @@ class NeRFDataset:
                 # if self.mode == 'blender' and '.' not in os.path.basename(f_path):
                     # f_path += '.png' # so silly...
                     
-                f_path += '.png'
+                # f_path += '.png'
                 # there are non-exist paths in fox...
                 if not os.path.exists(f_path):
                     print(f'[WARN] {f_path} not exists!')
