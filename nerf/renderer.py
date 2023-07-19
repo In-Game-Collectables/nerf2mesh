@@ -514,13 +514,13 @@ class NeRFRenderer(nn.Module):
 
         sigmas = torch.nan_to_num(sigmas, 0)
         sigmas = sigmas.cpu().numpy()
-
+        # np.save(os.path.join(save_path, f'sigmas.npy'),sigmas)
         # import kiui
         # for i in range(254,255):
         #     kiui.vis.plot_matrix((sigmas[..., i]).astype(np.float32))
 
         if self.opt.sdf:
-            vertices, triangles = mcubes.marching_cubes(-sigmas, 0)
+            vertices, triangles = mcubes.marching_cubes(-sigmas, -0.001) #Set density threshold to slightly higher than zero
         else:
             vertices, triangles = mcubes.marching_cubes(sigmas, density_thresh)
 
@@ -739,6 +739,9 @@ class NeRFRenderer(nn.Module):
                 sigmas = ((p + 1e-5) / (c + 1e-5)).view(-1).clip(0, 1) # sigmas are alpha now
 
             weights, weights_sum, depth, image = raymarching.composite_rays_train(sigmas, rgbs, ts, rays, T_thresh, self.opt.sdf)
+            
+            # weights = sigmas * torch.cumprod(torch.cat([torch.ones([sigmas.shape[0], 1]), 1. - sigmas + 1e-7], -1), -1)[:, :-1]
+            # weights_sum = weights.sum(dim=-1, keepdim=True)
 
             results['num_points'] = xyzs.shape[0]
             results['xyzs'] = xyzs
