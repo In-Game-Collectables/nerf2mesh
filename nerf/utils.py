@@ -1288,7 +1288,9 @@ class Trainer(object):
                     for metric in self.metrics:
                         metric_val = metric.update(preds, truths)
                         metric_vals.append(metric_val)
-
+                    # Uncomment to save mesh at every evaluation iteration
+                    # self.model.eval_export_stage0('mesh_'+str(name), resolution=512, decimate_target=1e5, dataset=None)
+                    
                     # save image
                     save_path = os.path.join(self.workspace, 'validation', f'{name}_{self.local_step:04d}_rgb.png')
                     save_path_depth = os.path.join(self.workspace, 'validation', f'{name}_{self.local_step:04d}_depth.png')
