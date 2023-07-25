@@ -467,6 +467,72 @@ class NeRFRenderer(nn.Module):
         with open(mlp_file, 'w') as fp:
             json.dump(mlp, fp, indent=2)
 
+    @torch.no_grad()
+    def eval_export_stage0(self, name='test', resolution=None, decimate_target=1e5, dataset=None, S=128):
+        
+        save_path = os.path.join(self.opt.workspace, 'mesh_stage0')
+        os.makedirs(save_path, exist_ok=True)
+            
+        # only for the inner mesh inside [-1, 1]
+        if resolution is None:
+            resolution = self.grid_size
+
+        device = self.density_bitfield.device
+
+        density_thresh = min(self.mean_density, self.density_thresh)
+
+        # sigmas = np.zeros([resolution] * 3, dtype=np.float32)
+        sigmas = torch.zeros([resolution] * 3, dtype=torch.float32, device=device)
+
+        if resolution == self.grid_size:
+            # re-map from morton code to regular coords...
+            all_indices = torch.arange(resolution**3, device=device, dtype=torch.int)
+            all_coords = raymarching.morton3D_invert(all_indices).long()
+            sigmas[tuple(all_coords.T)] = self.density_grid[0]
+        else:
+            # query
+            X = torch.linspace(-1, 1, resolution).split(S)
+            Y = torch.linspace(-1, 1, resolution).split(S)
+            Z = torch.linspace(-1, 1, resolution).split(S)
+
+            for xi, xs in enumerate(X):
+                for yi, ys in enumerate(Y):
+                    for zi, zs in enumerate(Z):
+                        xx, yy, zz = custom_meshgrid(xs, ys, zs)
+                        pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1) # [S, 3]
+                        with torch.cuda.amp.autocast(enabled=self.opt.fp16):
+                            val = self.density(pts.to(device))['sigma'] # [S, 1]
+                        sigmas[xi * S: xi * S + len(xs), yi * S: yi * S + len(ys), zi * S: zi * S + len(zs)] = val.reshape(len(xs), len(ys), len(zs)) 
+
+            # use the density_grid as a baseline mask (also excluding untrained regions)
+            if not self.opt.sdf:
+                mask = torch.zeros([self.grid_size] * 3, dtype=torch.float32, device=device)
+                all_indices = torch.arange(self.grid_size**3, device=device, dtype=torch.int)
+                all_coords = raymarching.morton3D_invert(all_indices).long()
+                mask[tuple(all_coords.T)] = self.density_grid[0]
+                mask = F.interpolate(mask.unsqueeze(0).unsqueeze(0), size=[resolution] * 3, mode='nearest').squeeze(0).squeeze(0)
+                mask = (mask > density_thresh)
+                sigmas = sigmas * mask
+
+        sigmas = torch.nan_to_num(sigmas, 0)
+        sigmas = sigmas.cpu().numpy()
+        # np.save(os.path.join(save_path, f'sigmas.npy'),sigmas)
+        # import kiui
+        # for i in range(254,255):
+        #     kiui.vis.plot_matrix((sigmas[..., i]).astype(np.float32))
+
+        if self.opt.sdf:
+            vertices, triangles = mcubes.marching_cubes(-sigmas, -0.001) #Set density threshold to slightly higher than zero
+        else:
+            vertices, triangles = mcubes.marching_cubes(sigmas, density_thresh)
+
+        vertices = vertices / (resolution - 1.0) * 2 - 1
+        vertices = vertices.astype(np.float32)
+        triangles = triangles.astype(np.int32)
+
+        mesh = trimesh.Trimesh(vertices, triangles, process=False)
+        mesh.export(os.path.join(save_path, name+'_rgb.ply'))
+        
     
     @torch.no_grad()
     def export_stage0(self, save_path, resolution=None, decimate_target=1e5, dataset=None, S=128):
