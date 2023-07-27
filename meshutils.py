@@ -294,8 +294,8 @@ def decimate_and_refine_mesh(verts, faces, mask, decimate_ratio=0.1, refine_size
 
         # ms.meshing_isotropic_explicit_remeshing(iterations=3, targetlen=pml.AbsoluteValue(refine_size), selectedonly=True)
     # Reorient the faces of the mesh
-    ms.select_all()
-    ms.re_orient_all_faces_coherentely()
+    ms.set_selection_all()
+    ms.meshing_re_orient_faces_coherentely()
     
     # extract mesh
     m = ms.current_mesh()
