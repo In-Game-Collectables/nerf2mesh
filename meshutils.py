@@ -59,6 +59,68 @@ def decimate_mesh(verts, faces, target, backend='pymeshlab', remesh=False, optim
 
     return verts, faces
 
+def remove_boundary(verts, faces):
+    
+    _ori_vert_shape = verts.shape
+    _ori_face_shape = faces.shape
+
+    m = pml.Mesh(verts, faces)
+    ms = pml.MeshSet()
+    ms.add_mesh(m, 'mesh') # will copy!
+    m = ms.current_mesh()
+    
+    # select boudary faces
+    ms.compute_selection_from_mesh_border()
+
+    # check if there are boundary faces
+    if m.selected_face_number() > 0:
+        
+        # remove vertices and faces
+        ms.meshing_remove_selected_vertices()
+        ms.meshing_remove_selected_faces()
+        
+        # close holes
+        ms.meshing_close_holes()
+        print(f'[INFO] Removing boundary faces/edges and closing holes')
+
+    # extract
+    m = ms.current_mesh()
+    verts = m.vertex_matrix()
+    faces = m.face_matrix()
+
+    print(f'[INFO] mesh mask trigs: {_ori_vert_shape} --> {verts.shape}, {_ori_face_shape} --> {faces.shape}')
+    
+    if 'mesh_volume' in ms.get_geometric_measures().keys():
+        print(f'[INFO] mesh volume: {ms.get_geometric_measures()["mesh_volume"]}, mesh is watertight')
+    else:
+        print(f'[INFO] unable to calculate mesh volume. mesh is NOT watertight')
+    
+    return verts, faces
+
+
+def mesh_report(verts, faces):
+    fn_dict = {'boundary_face':0,'non_man_edge_face':0,'non_man_vertex_face':0}
+    _ori_vert_shape = verts.shape
+    _ori_face_shape = faces.shape
+
+    m = pml.Mesh(verts, faces)
+    ms = pml.MeshSet()
+    ms.add_mesh(m, 'mesh') # will copy!
+    m = ms.current_mesh()
+    
+    ms.compute_selection_from_mesh_border()
+    fn_dict['boundary_face'] = m.selected_face_number()
+    
+    ms.select_non_manifold_edges
+    fn_dict['non_man_edge_face'] = m.selected_face_number()
+    
+    ms.select_non_manifold_vertices
+    fn_dict['non_man_vertex_face'] = m.selected_face_number()
+    
+    mesh_dict = ms.get_geometric_measures()
+    mesh_dict.update(fn_dict)
+    
+    return mesh_dict
 
 def remove_masked_trigs(verts, faces, mask, dilation=5):
     # mask: 0 == keep, 1 == remove
@@ -208,10 +270,22 @@ def decimate_and_refine_mesh(verts, faces, mask, decimate_ratio=0.1, refine_size
     if refine_remesh_size > 0:
         ms.meshing_isotropic_explicit_remeshing(iterations=3, targetlen=pml.AbsoluteValue(refine_remesh_size), selectedonly=True)
     
+    # select boudary faces and remoive them
+    ms.compute_selection_from_mesh_border()
+    if m.selected_face_number() > 0:
+        
+        # remove vertices and faces
+        ms.meshing_remove_selected_vertices()
+        ms.meshing_remove_selected_faces()
+    
     # repair
     ms.set_selection_none(allfaces=True)
     ms.meshing_repair_non_manifold_edges(method=0)
     ms.meshing_repair_non_manifold_vertices(vertdispratio=0)
+    
+    # close holes
+    ms.meshing_close_holes()
+    print(f'[INFO] Removing boundary faces/edges and closing holes')
     
     # refine 
     if refine_size > 0:
@@ -219,14 +293,22 @@ def decimate_and_refine_mesh(verts, faces, mask, decimate_ratio=0.1, refine_size
         ms.meshing_surface_subdivision_midpoint(threshold=pml.AbsoluteValue(refine_size), selected=True)
 
         # ms.meshing_isotropic_explicit_remeshing(iterations=3, targetlen=pml.AbsoluteValue(refine_size), selectedonly=True)
-
+    # Reorient the faces of the mesh
+    ms.select_all()
+    ms.re_orient_all_faces_coherentely()
+    
     # extract mesh
     m = ms.current_mesh()
     verts = m.vertex_matrix()
     faces = m.face_matrix()
 
     print(f'[INFO] mesh decimating & subdividing: {_ori_vert_shape} --> {verts.shape}, {_ori_face_shape} --> {faces.shape}')
-
+    
+    if 'mesh_volume' in ms.get_geometric_measures().keys():
+        print(f'[INFO] mesh volume: {ms.get_geometric_measures()["mesh_volume"]}, mesh is watertight')
+    else:
+        print(f'[INFO] unable to calculate mesh volume. mesh is NOT watertight')
+        
     return verts, faces
 
 

@@ -245,9 +245,18 @@ class NeRFRenderer(nn.Module):
 
             # mesh = trimesh.Trimesh(v, f, process=False)
             # mesh.export(os.path.join(self.opt.workspace, 'mesh_stage0', 'mesh_0_before_updated.ply'))
-
             v, f = decimate_and_refine_mesh(v, f, mask, decimate_ratio=self.opt.refine_decimate_ratio, refine_size=self.opt.refine_size, refine_remesh_size=self.opt.refine_remesh_size)
-            # export
+            mesh_info = mesh_report(v,f)
+            
+            # Save mesh information into a .txt file
+            mesh_file = os.path.join(self.opt.workspace, f'mesh_info.txt')
+            with open(mesh_file, 'w') as fp:
+                print(mesh_info, file=fp)
+                if 'mesh_volume' in mesh_info.keys():
+                    fp.write(f'\n mesh is watertight')
+                else:
+                    fp.write(f'\n mesh is NOT watertight')
+
             mesh = trimesh.Trimesh(v, f, process=False)
             mesh.export(os.path.join(self.opt.workspace, 'mesh_stage0', 'mesh_0_updated.ply'))
             v, f = mesh.vertices, mesh.faces
@@ -306,7 +315,7 @@ class NeRFRenderer(nn.Module):
 
             v_np = v.cpu().numpy() # [N, 3]
             f_np = f.cpu().numpy() # [M, 3]
-
+            
             print(f'[INFO] running xatlas to unwrap UVs for mesh: v={v_np.shape} f={f_np.shape}')
 
             # unwrap uv in contracted space
@@ -409,7 +418,7 @@ class NeRFRenderer(nn.Module):
             # save obj (v, vt, f /)
             obj_file = os.path.join(path, f'mesh_{cas}.obj')
             mtl_file = os.path.join(path, f'mesh_{cas}.mtl')
-
+            
             print(f'[INFO] writing obj mesh to {obj_file}')
             with open(obj_file, "w") as fp:
 
@@ -445,7 +454,7 @@ class NeRFRenderer(nn.Module):
             cur_v = v[self.v_cumsum[cas]:self.v_cumsum[cas+1]]
             cur_f = f[self.f_cumsum[cas]:self.f_cumsum[cas+1]] - self.v_cumsum[cas]
             _export_obj(cur_v, cur_f, h0, w0, self.opt.ssaa, cas)
-
+               
             # half the texture resolution for remote area.
             if not self.opt.sdf and h0 > 2048 and w0 > 2048:
                 h0 //= 2
@@ -605,7 +614,7 @@ class NeRFRenderer(nn.Module):
         ### decimation
         if decimate_target > 0 and triangles.shape[0] > decimate_target:
             vertices, triangles = decimate_mesh(vertices, triangles, decimate_target, remesh=False)
-
+        
         mesh = trimesh.Trimesh(vertices, triangles, process=False)
         mesh.export(os.path.join(save_path, f'mesh_0.ply'))
 
