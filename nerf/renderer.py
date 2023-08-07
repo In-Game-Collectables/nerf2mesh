@@ -472,7 +472,7 @@ class NeRFRenderer(nn.Module):
         # for i in range(254,255):
         #     kiui.vis.plot_matrix((sdfs[..., i]).astype(np.float32))
 
-        vertices, triangles = mcubes.marching_cubes(-sdfs, -0.001)
+        vertices, triangles = mcubes.marching_cubes(-sdfs, -0.002)
         vertices = vertices / (resolution - 1.0) * 2 - 1
         vertices = vertices.astype(np.float32)
         triangles = triangles.astype(np.int32)
