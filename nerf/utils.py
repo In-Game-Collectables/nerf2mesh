@@ -513,10 +513,6 @@ class Trainer(object):
         self.device = device if device is not None else torch.device(f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu')
         self.console = Console()
 
-        # try out torch 2.0 [no significant acc for V100...]
-        if torch.__version__[0] == '2':
-            model = torch.compile(model)
-
         model.to(self.device)
         if self.world_size > 1:
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -594,6 +590,8 @@ class Trainer(object):
 
             if self.use_checkpoint == "scratch":
                 self.log("[INFO] Training from scratch ...")
+                if self.opt.stage == 0:
+                    self.model.init_double_sphere()
             elif self.use_checkpoint == "latest":
                 self.log("[INFO] Loading latest checkpoint ...")
                 self.load_checkpoint()
@@ -649,9 +647,11 @@ class Trainer(object):
         #     # bg_color = torch.rand(3, device=self.device) # [3], frame-wise random.
         #     bg_color = torch.rand(N, 3, device=self.device) # [N, 3], pixel-wise random.
 
-        if self.opt.sdf:
+        if self.opt.stage == 0:
             self.opt.cos_anneal_ratio = min(1, self.global_step / (0.5 * self.opt.iters))
-            self.opt.normal_anneal_epsilon = 1e-3 * (1 - min(0.9, self.global_step / (0.5 * self.opt.iters)))
+            self.opt.normal_anneal_epsilon = 1e-1 * (1 - min(0.999, self.global_step / (0.5 * self.opt.iters)))
+            if self.opt.progressive_level:
+                self.model.max_level = 4 + int(12 * min(1, self.global_step / (0.5 * self.opt.iters)))
 
         if self.opt.background == 'white':
             bg_color = 1
@@ -716,18 +716,15 @@ class Trainer(object):
                 pred_mask = outputs['weights_sum']
                 loss = loss + self.opt.lambda_mask * self.criterion(pred_mask.view(-1), gt_mask.view(-1))
 
-            if self.opt.refine:
-                self.model.update_triangles_errors(loss.detach())
-
         loss = loss.mean()
 
         # extra loss...
         if self.opt.stage == 0:
 
             if self.opt.lambda_entropy > 0:
-                w = outputs['weights'].clamp(1e-5, 1 - 1e-5)
+                w = outputs['weights'].clamp(1e-5, 1 - 1e-5) + 1e-12
                 entropy = - w * torch.log2(w) - (1 - w) * torch.log2(1 - w)
-                w2 = outputs['weights_sum'].clamp(1e-5, 1 - 1e-5)
+                w2 = outputs['weights_sum'].clamp(1e-5, 1 - 1e-5) + 1e-12
                 entropy2 = - w2 * torch.log2(w2) - (1 - w2) * torch.log2(1 - w2)
                 loss = loss + self.opt.lambda_entropy * (entropy.mean() + entropy2.mean())
             
@@ -736,7 +733,7 @@ class Trainer(object):
                 if specs is not None:
                     loss = loss + self.opt.lambda_specular * (specs ** 2).sum(-1).mean()
                 
-            if self.opt.sdf and self.opt.lambda_eikonal > 0:
+            if self.opt.lambda_eikonal > 0:
                 normal = outputs['normal']
                 loss_eikonal = ((torch.linalg.norm(normal, ord=2, dim=-1) - 1) ** 2).mean()
                 loss = loss + self.opt.lambda_eikonal * loss_eikonal
@@ -1029,7 +1026,7 @@ class Trainer(object):
                 data = next(loader)
 
             # update grid every 16 steps
-            if self.model.cuda_ray and self.global_step % self.opt.update_extra_interval == 0:
+            if self.global_step % self.opt.update_extra_interval == 0:
                 loss_grid = self.model.update_extra_state()
             else:
                 loss_grid = None
@@ -1151,7 +1148,7 @@ class Trainer(object):
         for data in loader:
             
             # update grid every 16 steps
-            if self.model.cuda_ray and self.global_step % self.opt.update_extra_interval == 0:
+            if self.global_step % self.opt.update_extra_interval == 0:
                 loss_grid = self.model.update_extra_state()
             else:
                 loss_grid = None
@@ -1191,8 +1188,7 @@ class Trainer(object):
                     self.writer.add_scalar("train/lr", self.optimizer.param_groups[0]['lr'], self.global_step)
                 
                 desc = f"loss={loss_val:.6f} ({total_loss/self.local_step:.6f})"
-                if self.opt.sdf:
-                    desc += f" var={torch.exp(self.model.variance * 10.0).item():.4f}"
+                desc += f" var={torch.exp(self.model.variance * 10.0).item():.4f}"
                 if self.scheduler_update_every_step:
                     desc += f" lr={self.optimizer.param_groups[0]['lr']:.6f}"
                 pbar.set_description(desc)
@@ -1203,7 +1199,7 @@ class Trainer(object):
             if self.opt.stage == 1 and self.opt.refine and self.global_step in self.opt.refine_steps:
                 
                 self.log(f'[INFO] refine and decimate mesh at {self.global_step} step')
-                self.model.refine_and_decimate()
+                self.model.remesh()
 
                 # reinit optim since params changed.
                 self.optimizer = self.optimizer_fn(self.model)
@@ -1288,9 +1284,7 @@ class Trainer(object):
                     for metric in self.metrics:
                         metric_val = metric.update(preds, truths)
                         metric_vals.append(metric_val)
-                    # Uncomment to save mesh at every evaluation iteration
-                    # self.model.eval_export_stage0('mesh_'+str(name), resolution=512, decimate_target=1e5, dataset=None)
-                    
+
                     # save image
                     save_path = os.path.join(self.workspace, 'validation', f'{name}_{self.local_step:04d}_rgb.png')
                     save_path_depth = os.path.join(self.workspace, 'validation', f'{name}_{self.local_step:04d}_depth.png')
@@ -1355,8 +1349,7 @@ class Trainer(object):
             'stage': self.opt.stage,
         }
 
-        if self.model.cuda_ray:
-            state['mean_density'] = self.model.mean_density
+        state['mean_density'] = self.model.mean_density
 
         if full:
             state['optimizer'] = self.optimizer.state_dict()
@@ -1415,6 +1408,8 @@ class Trainer(object):
                 self.log(f"[INFO] Latest checkpoint is {checkpoint}")
             else:
                 self.log("[WARN] No checkpoint found, abort loading latest model.")
+                if self.opt.stage == 0:
+                    self.model.init_double_sphere()
                 return
 
         checkpoint_dict = torch.load(checkpoint, map_location=self.device)
@@ -1438,9 +1433,8 @@ class Trainer(object):
             except:
                 self.log("[WARN] failed to loaded EMA.")
 
-        if self.model.cuda_ray:
-            if 'mean_density' in checkpoint_dict:
-                self.model.mean_density = checkpoint_dict['mean_density']
+        if 'mean_density' in checkpoint_dict:
+            self.model.mean_density = checkpoint_dict['mean_density']
         
         if model_only:
             return
