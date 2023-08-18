@@ -119,8 +119,12 @@ class NeRFNetwork(NeRFRenderer):
         albedo = materials[..., :3]
         metallic = materials[..., 3:4]
         roughness = materials[..., 4:5]
+        
+        # Normal
+        normals = self.normal(x)
+        normals = self.safe_normalize(normals)
 
-        return albedo, metallic, roughness
+        return albedo, metallic, roughness, normals
 
     # init the sdf to two spheres by pretraining, assume view cameras fall between the spheres
     def init_double_sphere(self, r1=0.5, r2=1.5, iters=8192, batch_size=8192):
@@ -167,6 +171,9 @@ class NeRFNetwork(NeRFRenderer):
             ], dim=-1)
 
         return normal
+    
+    def safe_normalize(self, x, eps=1e-20):
+        return x / torch.sqrt(torch.clamp(torch.sum(x * x, -1, keepdim=True), min=eps))
     
     # optimizer utils
     def get_params(self, lr):
