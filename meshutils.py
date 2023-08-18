@@ -2,7 +2,7 @@ import numpy as np
 import pymeshlab as pml
 
 def isotropic_explicit_remeshing(verts, faces, remesh_size=0.01):
-
+    
     _ori_vert_shape = verts.shape
     _ori_face_shape = faces.shape
 
@@ -14,15 +14,64 @@ def isotropic_explicit_remeshing(verts, faces, remesh_size=0.01):
     # ms.apply_coord_taubin_smoothing()
     ms.meshing_isotropic_explicit_remeshing(iterations=3, targetlen=pml.AbsoluteValue(remesh_size))
 
+    # select boudary faces and remoive them
+    ms.compute_selection_from_mesh_border()
+    if m.selected_face_number() > 0:
+        
+        # remove vertices and faces
+        ms.meshing_remove_selected_vertices()
+        ms.meshing_remove_selected_faces()
+    
+    # repair
+    ms.set_selection_none(allfaces=True)
+    ms.meshing_repair_non_manifold_edges(method=0)
+    ms.meshing_repair_non_manifold_vertices(vertdispratio=0)
+    
+    # close holes
+    ms.meshing_close_holes()
+    print(f'[INFO] Removing boundary faces/edges and closing holes')
+
+    # Reorient the faces of the mesh
+    ms.set_selection_all()
+    ms.meshing_re_orient_faces_coherentely()
+
     # extract mesh
     m = ms.current_mesh()
     verts = m.vertex_matrix()
     faces = m.face_matrix()
 
     print(f'[INFO] isotropic explicit remesh: {_ori_vert_shape} --> {verts.shape}, {_ori_face_shape} --> {faces.shape}')
+    
+    if 'mesh_volume' in ms.get_geometric_measures().keys():
+        print(f'[INFO] mesh volume: {ms.get_geometric_measures()["mesh_volume"]}, mesh is watertight')
+    else:
+        print(f'[INFO] unable to calculate mesh volume. mesh is NOT watertight')
 
     return verts, faces
-    
+
+def mesh_report(verts, faces):
+    fn_dict = {'boundary_face':0,'non_man_edge_face':0,'non_man_vertex_face':0}
+    _ori_vert_shape = verts.shape
+    _ori_face_shape = faces.shape
+
+    m = pml.Mesh(verts, faces)
+    ms = pml.MeshSet()
+    ms.add_mesh(m, 'mesh') # will copy!
+    m = ms.current_mesh()
+
+    ms.compute_selection_from_mesh_border()
+    fn_dict['boundary_face'] = m.selected_face_number()
+
+    ms.select_non_manifold_edges
+    fn_dict['non_man_edge_face'] = m.selected_face_number()
+
+    ms.select_non_manifold_vertices
+    fn_dict['non_man_vertex_face'] = m.selected_face_number()
+
+    mesh_dict = ms.get_geometric_measures()
+    mesh_dict.update(fn_dict)
+
+    return mesh_dict
 
 def decimate_mesh(verts, faces, target, backend='pymeshlab', remesh=False, optimalplacement=True):
     # optimalplacement: default is True, but for flat mesh must turn False to prevent spike artifect.

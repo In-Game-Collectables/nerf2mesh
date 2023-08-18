@@ -206,6 +206,17 @@ class NeRFRenderer(nn.Module):
             # remesh
             v, f = isotropic_explicit_remeshing(v, f, self.opt.refine_remesh_size)
 
+            mesh_info = mesh_report(v,f)
+
+            # Save mesh information into a .txt file
+            mesh_file = os.path.join(self.opt.workspace, f'mesh_info.txt')
+            with open(mesh_file, 'w') as fp:
+                print(mesh_info, file=fp)
+                if 'mesh_volume' in mesh_info.keys():
+                    fp.write(f'\n mesh is watertight')
+                else:
+                    fp.write(f'\n mesh is NOT watertight')
+
             # export
             mesh = trimesh.Trimesh(v, f, process=False)
             mesh.export(os.path.join(self.opt.workspace, 'mesh_stage0', 'mesh_0_updated.ply'))
@@ -306,6 +317,7 @@ class NeRFRenderer(nn.Module):
             albedo = torch.zeros(h * w, 3, device=device, dtype=torch.float32)
             metallic = torch.zeros(h * w, 1, device=device, dtype=torch.float32)
             roughness = torch.zeros(h * w, 1, device=device, dtype=torch.float32)
+            normals = torch.zeros(h * w, 3, device=device, dtype=torch.float32)
 
             if mask.any():
                 xyzs = xyzs[mask] # [M, 3]
@@ -317,25 +329,28 @@ class NeRFRenderer(nn.Module):
                     ind_code = None
 
                 # batched inference to avoid OOM
-                all_albedo, all_metallic, all_roughness = [], [], []
+                all_albedo, all_metallic, all_roughness, all_normals  = [], [], [], []
                 head = 0
                 while head < xyzs.shape[0]:
                     tail = min(head + 640000, xyzs.shape[0])
                     with torch.cuda.amp.autocast(enabled=self.opt.fp16):
-                        _albedo, _metallic, _roughness = self.materials(xyzs[head:tail], ind_code)
+                        _albedo, _metallic, _roughness, _normals = self.materials(xyzs[head:tail], ind_code)
                         all_albedo.append(_albedo.float())
                         all_metallic.append(_metallic.float())
                         all_roughness.append(_roughness.float())
+                        all_normals.append(_normals.float())
                     head += 640000
 
                 albedo[mask] = torch.cat(all_albedo, dim=0)
                 metallic[mask] = torch.cat(all_metallic, dim=0)
                 roughness[mask] = torch.cat(all_roughness, dim=0)
+                normals[mask] = torch.cat(all_normals, dim=0)
             
             # quantize [0.0, 1.0] to [0, 255]
             albedo = (albedo.view(h, w, -1).cpu().numpy() * 255).round().astype(np.uint8)
             metallic = (metallic.view(h, w, -1).cpu().numpy() * 255).round().astype(np.uint8)
             roughness = (roughness.view(h, w, -1).cpu().numpy() * 255).round().astype(np.uint8)
+            normals = (normals.view(h, w, -1).cpu().numpy() * 255).round().astype(np.uint8)
 
             ### NN search as a queer antialiasing ...
             mask = mask.view(h, w)
@@ -357,6 +372,7 @@ class NeRFRenderer(nn.Module):
             albedo[tuple(inpaint_coords.T)] = albedo[tuple(search_coords[indices[:, 0]].T)]
             metallic[tuple(inpaint_coords.T)] = metallic[tuple(search_coords[indices[:, 0]].T)]
             roughness[tuple(inpaint_coords.T)] = roughness[tuple(search_coords[indices[:, 0]].T)]
+            normals[tuple(inpaint_coords.T)] = normals[tuple(search_coords[indices[:, 0]].T)]
 
             albedo = cv2.cvtColor(albedo, cv2.COLOR_RGB2BGR)
             
@@ -364,10 +380,12 @@ class NeRFRenderer(nn.Module):
                 albedo = cv2.resize(albedo, (w0, h0), interpolation=cv2.INTER_LINEAR)
                 metallic = cv2.resize(metallic, (w0, h0), interpolation=cv2.INTER_LINEAR)
                 roughness = cv2.resize(roughness, (w0, h0), interpolation=cv2.INTER_LINEAR)
+                normals = cv2.resize(normals, (w0, h0), interpolation=cv2.INTER_LINEAR)
 
             cv2.imwrite(os.path.join(path, f'albedo_{cas}.jpg'), albedo)
             cv2.imwrite(os.path.join(path, f'metallic_{cas}.jpg'), metallic)
             cv2.imwrite(os.path.join(path, f'roughness_{cas}.jpg'), roughness)
+            cv2.imwrite(os.path.join(path, f'normals_{cas}.jpg'), normals)
 
             # save obj (v, vt, f /)
             obj_file = os.path.join(path, f'mesh_{cas}.obj')
@@ -834,7 +852,7 @@ class NeRFRenderer(nn.Module):
             normals = normals.view(-1, 3)
             reflective = reflective.view(-1, 3)
             with torch.cuda.amp.autocast(enabled=self.opt.fp16):
-                _albedo, _metallic, _roughness = self.materials(xyzs[mask_flatten] if self.opt.enable_offset_nerf_grad else xyzs[mask_flatten].detach(), ind_code)
+                _albedo, _metallic, _roughness, _ = self.materials(xyzs[mask_flatten] if self.opt.enable_offset_nerf_grad else xyzs[mask_flatten].detach(), ind_code)
                 _diffuse_light, _specular_light = self.lighting(normals[mask_flatten], reflective[mask_flatten], roughness[mask_flatten])
             albedo[mask_flatten] = _albedo.float()
             metallic[mask_flatten] = _metallic.float()
