@@ -83,7 +83,8 @@ class NeRFNetwork(NeRFRenderer):
         # c: [1/N, individual_dim]
 
         sdf = self.sdf(x)
-        albedo, metallic, roughness = self.materials(x, c)
+        albedo, metallic, roughness, _ = self.materials(x, c)
+        
 
         return sdf, albedo, metallic, roughness
     
